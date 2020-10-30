@@ -1,0 +1,1 @@
+2020-02-03 09:10:31.447762 [ERROR  ]  [::1            ] GLOBAL::ERROR : [PHP ERROR] An error is occurred in the file D:\wamp\www\wf\modules\workflow\controllers\Workflow.php at line 152 raison : Undefined property: Workflow::$wf_instance_model [D:\wamp\www\wf\core\common.php::164]
