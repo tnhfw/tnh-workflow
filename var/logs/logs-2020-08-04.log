@@ -1,1 +1,0 @@
-2020-08-04 16:57:43.500538 [ERROR    ] [::1            ] APP::ERROR: An error is occurred in the file app\functions\function_common.php at line 7 raison : Non-static method Session::get() should not be called statically [core\common.php ->show_error():175]

@@ -28,7 +28,7 @@
                 $temp = explode('"', $operand2);
                 $operand2 = implode('\"', $temp);
             }
-            $logger->setLogger('FUNCTION::' . __FUNCTION__);
+            $logger->setLogger('WFV:FUNCTION::' . __FUNCTION__);
             $script = 'return "'.$operand1.'" ' . $operator . ' "'.$operand2 .'";';
             $logger->info('Evaluation condition is: "' .$script . '"');
             return eval($script);
@@ -46,7 +46,7 @@
          */
         function run_wf_service_node($service_definition, $wf_params){
             $logger = new Log();
-            $logger->setLogger('FUNCTION::' . __FUNCTION__);
+            $logger->setLogger('WFV:FUNCTION::' . __FUNCTION__);
             $obj = & get_instance();
             $obj->loader->library('workflow/WFServiceTaskLib');
             $logger->info('Service definition is: [' . $service_definition . ']');
@@ -87,7 +87,7 @@
          */
         function run_wf_script_node($script_definition, $wf_params){
             $logger = new Log();
-            $logger->setLogger('FUNCTION::' . __FUNCTION__);
+            $logger->setLogger('WFV:FUNCTION::' . __FUNCTION__);
             $logger->info('Script definition is: [' . stringify_vars($script_definition) . ']');
             extract($wf_params);
             $obj = & get_instance();
@@ -131,7 +131,7 @@
         }
     }
 
-    if(! function_exists('find_next_node_for_decision_node')){
+    if(! function_exists('execute_decision_node')){
         /**
          * This function is used to find the next node for decision node
          * 
@@ -144,9 +144,9 @@
          * 
          * @return object|null  the next node if found or null if can not found
          */
-        function find_next_node_for_decision_node($inst_id, $entity, $decisionNode, $previousNode, $previousNodeServiceResult, $previousNodeScriptResult){
+        function execute_decision_node($inst_id, $entity, $decisionNode, $previousNode, $previousNodeServiceResult, $previousNodeScriptResult){
             $logger = new Log();
-            $logger->setLogger('FUNCTION::' . __FUNCTION__);
+            $logger->setLogger('WFV:FUNCTION::' . __FUNCTION__);
             $obj = & get_instance();
             $obj->loader->model('workflow/wf_node_path_model');
             $obj->loader->model('workflow/wf_task_model');
@@ -210,6 +210,193 @@
             }
             return $returnNode;                   
         }
+    }
+
+
+   if(! function_exists('execute_user_node')){
+        /**
+         * Execute user node
+         * @param  integer $inst_id the workflow instance
+         * @param  integer $nodeId  the current node
+         * @param  integer $roleId  the role id to validate the node
+         * @return boolean          true if end node is reached otherwise false
+         */
+        function execute_user_node($inst_id, $nodeId, $roleId){
+            $logger = new Log();
+            $logger->setLogger('WFV:FUNCTION::' . __FUNCTION__);
+            $obj = &get_instance();
+            $obj->loader->model('workflow/wf_user_role_model');
+            $obj->loader->model('workflow/wf_task_model');
+            
+            $endNodeReached = false;
+            $actors = $obj->wf_user_role_model->getList($inst_id, $roleId);
+            if(! empty($actors)){
+                $params_task = array(
+                    'wf_task_status' => 'I',
+                    'wf_task_comment' => '',
+                    'wf_task_start_time' => date('Y-m-d H:i:s'),
+                    'wf_inst_id' => $inst_id,
+                    'wf_node_id' => $nodeId,
+                );
+                foreach ($actors as $l) {
+                    $params_task['user_id'] = $l->user_id;
+                    $obj->wf_task_model->insert($params_task);  
+                }
+            }
+            else{
+                //no actors, workflow end here
+                $logger->warning('No actors for user node [' . $nodeId . '], workflow termined.');
+                $result_str = __tr('wf_txt_validation_start_success_and_finish_no_actors_for_user_node');
+                $endNodeReached = true;
+            }
+            return $endNodeReached;
+        }
+    }
+
+    if(! function_exists('execute_end_node_actions')){
+        /**
+         * Execute the actions after end node reached
+         * @param  integer $inst_id the instance
+         * @return void
+         */
+        function execute_end_node_actions($inst_id){
+            $logger = new Log();
+            $logger->setLogger('WFV:FUNCTION::' . __FUNCTION__);
+            $obj = &get_instance();
+            $obj->loader->model('workflow/wf_instance_model');
+            $obj->loader->model('workflow/wf_task_model');
+            
+            $logger->info('End node reached stop workflow');
+            $params_instance = array(
+                'wf_inst_state' => 'T',
+                'wf_inst_end_date' => date('Y-m-d H:i:s')
+            );
+            $obj->wf_instance_model->update($inst_id, $params_instance);
+            $obj->wf_task_model->updateCond(
+                                            array(
+                                                'wf_inst_id' => $inst_id, 
+                                                'wf_task_status' => 'I'
+                                            ), 
+                                            array(
+                                                'wf_task_status' => 'C',
+                                                'wf_task_comment' => 'Workflow termined',
+                                                'wf_task_cancel_trigger' => 'S',
+                                                'wf_task_end_time' => date('Y-m-d H:i:s')
+                                            )
+                                        );
+
+        }
+    }
+
+    if(! function_exists('execute_workflow')){
+        /**
+         * Execute the workflow
+         * @param  integer  $wf_id           the workflow configuration
+         * @param  integer  $inst_id         the workflow instance
+         * @param  object  $entity          the entity instance
+         * @param  integer  $entity_id       the entity id
+         * @param  string  $entity_name     the entity name
+         * @param  object  $currentNode     the initial node
+         * @param  boolean $isStartWorkflow whether workflow run for the first time
+         * @return string                   the text result of execution
+         */
+        function execute_workflow($wf_id, $inst_id, $entity, $entity_id, $entity_name, $currentNode, $isStartWorkflow = false){
+            $logger = new Log();
+            $logger->setLogger('WFV:FUNCTION::' . __FUNCTION__);
+            $obj = &get_instance();
+            $obj->loader->model('workflow/wf_node_path_model');
+            
+            $previousNode = $currentNode;
+            $previousNodeScriptResult = null;
+            $previousNodeServiceResult = null;
+            $previousNodeScriptId = null;
+            $previousNodeServiceId = null;
+            $nextNode = $obj->wf_node_path_model->getNextNodeForWorkflow($wf_id, $currentNode->wf_node_id, 1);
+            $endNodeReached = false; //if already at the end node
+            $stop = false; //if need sort out the loop
+            $wf_task_types = get_wf_task_type_list();
+            $result_str = $isStartWorkflow ? __tr('wf_txt_validation_start_success') : __tr('wf_txt_validation_success');
+            while(! $stop && ! $endNodeReached){
+                if(! $nextNode || is_end_node($nextNode->wf_node_type)){
+                    //workflow finish here
+                    $logger->info('Next node does not exist or end node reached, workflow termined.');
+                    $endNodeReached = true;
+                    $result_str = $isStartWorkflow 
+                                            ? __tr('wf_txt_validation_start_success_and_finish_no_next_node_or_end_node')
+                                            : __tr('wf_txt_validation_success_and_finish_no_next_node_or_end_node');
+                    break;
+                }
+                $logger->info('Begin execution of node [' .$nextNode->wf_node_name. '], task type [' .$wf_task_types[$nextNode->wf_node_task_type]. '] ...');
+                //first check if is user node
+                if(is_user_node($nextNode->wf_node_task_type)){
+                    $endNodeReached = execute_user_node($inst_id, $nextNode->wf_node_id, $nextNode->wf_role_id);
+                    if($endNodeReached){
+                       $result_str = $isStartWorkflow 
+                                                    ? __tr('wf_txt_validation_start_success_and_finish_no_actors_for_user_node')
+                                                    : __tr('wf_txt_validation_success_and_finish_no_actors_for_user_node'); 
+                    }
+                    $stop = true;
+                    break;
+                }
+                 //check if is script node
+                else if(is_script_node($nextNode->wf_node_task_type)){
+                    //execute script
+                    if($nextNode->wf_node_script){
+                        $previousNodeScriptResult = run_wf_script_node($nextNode->wf_node_script, array(
+                            'instance_id' => $inst_id,
+                            'entity_id' => $entity_id,
+                            'entity_name' => $entity_name
+                        ));
+                        $previousNodeScriptId = $nextNode->wf_node_id;
+                        $logger->info('Previous script result is [' . $previousNodeScriptResult . ']');
+                        $logger->info('Previous script node id is [' . $previousNodeScriptId . ']');
+                    }
+                    $previousNode = $nextNode;
+                    $nextNode = $obj->wf_node_path_model->getNextNodeForWorkflow($wf_id, $nextNode->wf_node_id, 1);
+                }
+                 //check if is service node
+                else if(is_service_node($nextNode->wf_node_task_type)){
+                    //execute service
+                    if($nextNode->wf_node_service){
+                        $service_definition = $nextNode->wf_node_service;
+                        $previousNodeServiceResult = run_wf_service_node($service_definition, array(
+                            'instance_id' => $inst_id,
+                            'entity_id' => $entity_id,
+                            'entity_name' => $entity_name
+                        ));
+                        $previousNodeServiceId = $nextNode->wf_node_id;
+                        $logger->info('Previous service result is [' . $previousNodeServiceResult . ']');
+                        $logger->info('Previous service node id is [' . $previousNodeServiceId . ']');
+                    }
+                    $previousNode = $nextNode;
+                    $nextNode = $obj->wf_node_path_model->getNextNodeForWorkflow($wf_id, $nextNode->wf_node_id, 1);
+                }
+                 //check if is decision node
+                else if(is_decision_node($nextNode->wf_node_task_type)){
+                    $nodeFound = execute_decision_node($inst_id, $entity, $nextNode, $previousNode, $previousNodeServiceResult, $previousNodeScriptResult);
+                    if($nodeFound){
+                        $previousNode = $nextNode;
+                        $nextNode = $nodeFound;
+                    }
+                     else{
+                        $result_str = $isStartWorkflow
+                                                        ? __tr('wf_txt_validation_start_success_and_finish_no_path_for_decision_node')
+                                                        : __tr('wf_txt_validation_success_and_finish_no_path_for_decision_node');
+                        $stop = true;
+                        $endNodeReached = true;
+                        $logger->info('No nodes match the conditions for decision node [' . $nextNode->wf_node_name . ']');
+                    }
+                }
+                $logger->info('End execution of node [' . $previousNode->wf_node_name . ']');
+            }
+            //check if we already at the end
+            if($endNodeReached){
+                //Execute end node actions
+                execute_end_node_actions($inst_id);
+            }
+            return $result_str;
+        }
+
     }
 
     if(! function_exists('build_flowchart')){

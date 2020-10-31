@@ -1,2 +1,0 @@
-2020-02-22 09:04:56.101229 [ERROR  ]  [::1            ] GLOBAL::ERROR : [PHP ERROR] An error is occurred in the file D:\wamp\www\wf\core\common.php at line 510 raison : Use of undefined constant IS_CLI - assumed 'IS_CLI' [D:\wamp\www\wf\core\common.php::168]
-2020-02-22 09:07:38.102536 [ERROR  ]  [::1            ] GLOBAL::ERROR : [PHP ERROR] An error is occurred in the file D:\wamp\www\wf\modules\workflow\models\Wf_instance_model.php at line 28 raison : Call to undefined method Database::select() [D:\wamp\www\wf\core\common.php::168]

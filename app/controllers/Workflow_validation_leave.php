@@ -8,17 +8,14 @@ class Workflow_validation_leave extends Controller{
         parent::__construct();
         auth();
         $this->loader->model('leave_model');
-
         $this->loader->model('workflow/workflow_model');
         $this->loader->model('workflow/wf_node_model');
-        $this->loader->model('workflow/wf_node_path_model');
         $this->loader->model('workflow/wf_role_model');
         $this->loader->model('workflow/wf_user_role_model');
         $this->loader->model('users_model');
         $this->loader->model('workflow/wf_node_outcome_model');
         $this->loader->model('workflow/wf_instance_model');
         $this->loader->model('workflow/wf_task_model');
-        $this->logger->setLogger('WFV');
     }
 
    public function index(){
@@ -156,126 +153,9 @@ class Workflow_validation_leave extends Controller{
                         }
                     }
                 }
-                ////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-                /////////////////////////////////////// Begin workflow execution //////////////////////////////////////////////////////////////// //
-                $previousNode = $start;
-                $previousNodeScriptResult = null;
-                $previousNodeServiceResult = null;
-                $previousNodeScriptId = null;
-                $previousNodeServiceId = null;
-                $nextNode = $this->wf_node_path_model->getNextNodeForWorkflow($entity->wf_id, $start->wf_node_id, 1);
-                $endNodeReached = false; //if already at the end node
-                $stop = false; //if need sort out the loop
-                $wf_task_types = get_wf_task_type_list();
-                $result_str = __tr('wf_txt_validation_start_success');
-                while(! $stop && ! $endNodeReached){
-                    if(! $nextNode || is_end_node($nextNode->wf_node_type)){
-                        //workflow finish here
-                        $this->logger->info('Next node does not exist or is the End node, workflow finish here');
-                        $endNodeReached = true;
-                        $result_str = __tr('wf_txt_validation_start_success_and_finish_no_next_node_or_end_node');
-                        break;
-                    }
-                    $this->logger->info('Begin execution of node [' .$nextNode->wf_node_name. '], task type [' .$wf_task_types[$nextNode->wf_node_task_type]. '] ...');
-
-                    //first check if is user node
-                    if(is_user_node($nextNode->wf_node_task_type)){
-                        //insert task
-                        $actors = $this->wf_user_role_model->getList($inst_id, $nextNode->wf_role_id);
-                        if(! empty($actors)){
-                            $params_task = array(
-                                'wf_task_status' => 'I',
-                                'wf_task_comment' => '',
-                                'wf_task_start_time' => date('Y-m-d H:i:s'),
-                                'wf_inst_id' => $inst_id,
-                                'wf_node_id' => $nextNode->wf_node_id,
-                            );
-                            foreach ($actors as $l) {
-                                $params_task['user_id'] = $l->user_id;
-                                $this->wf_task_model->insert($params_task);  
-                            }
-                        }
-                        else{
-                            //no actors, workflow end here
-                             $this->logger->info('No actors for user node [' . $nextNode->wf_node_name . '], workflow finish here');
-                            $result_str = __tr('wf_txt_validation_start_success_and_finish_no_actors_for_user_node');
-                            $endNodeReached = true;
-                        }
-                        $stop = true;
-                        break;
-                    }
-                     //check if is script node
-                    else if(is_script_node($nextNode->wf_node_task_type)){
-                        //execute script
-                        if($nextNode->wf_node_script){
-                            $previousNodeScriptResult = run_wf_script_node($nextNode->wf_node_script, array(
-                                'instance_id' => $inst_id,
-                                'entity_id' => $entity_id,
-                                'entity_name' => $entity_name
-                            ));
-                            $previousNodeScriptId = $nextNode->wf_node_id;
-                            $this->logger->info('Previous script result is: ' .$previousNodeScriptResult);
-                            $this->logger->info('Previous script node id is: ' .$previousNodeScriptId);
-                        }
-                        $previousNode = $nextNode;
-                        $nextNode = $this->wf_node_path_model->getNextNodeForWorkflow($entity->wf_id, $nextNode->wf_node_id, 1);
-                    }
-                     //check if is service node
-                    else if(is_service_node($nextNode->wf_node_task_type)){
-                        //execute service
-                        if($nextNode->wf_node_service){
-                            $service_definition = $nextNode->wf_node_service;
-                            $previousNodeServiceResult = run_wf_service_node($service_definition, array(
-                                'instance_id' => $inst_id,
-                                'entity_id' => $entity_id,
-                                'entity_name' => $entity_name
-                            ));
-                            $previousNodeServiceId = $nextNode->wf_node_id;
-                            $this->logger->info('Previous service result is: ' .$previousNodeServiceResult);
-                            $this->logger->info('Previous service node id is: ' .$previousNodeServiceId);
-                        }
-                        $previousNode = $nextNode;
-                        $nextNode = $this->wf_node_path_model->getNextNodeForWorkflow($entity->wf_id, $nextNode->wf_node_id, 1);
-                    }
-                     //check if is decision node
-                    else if(is_decision_node($nextNode->wf_node_task_type)){
-                        $nodeFound = find_next_node_for_decision_node($inst_id, $entity, $nextNode, $previousNode, $previousNodeServiceResult, $previousNodeScriptResult);
-                        if($nodeFound){
-                            $previousNode = $nextNode;
-                            $nextNode = $nodeFound;
-                        }
-                         else{
-                            $result_str = __tr('wf_txt_validation_start_success_and_finish_no_path_for_decision_node');
-                            $stop = true;
-                            $endNodeReached = true;
-                            $this->logger->info('No nodes match the conditions for decision node [' .$nextNode->wf_node_name. ']');
-                        }
-                    }
-					$this->logger->info('End execution of node [' .$previousNode->wf_node_name. ']');
-                }
-                //check if we already at the end
-                if($endNodeReached){
-                    $this->logger->info('End node reached stop workflow here');
-                    $params_instance = array(
-                        'wf_inst_state' => 'T',
-                        'wf_inst_end_date' => date('Y-m-d H:i:s')
-                    );
-                    $this->wf_instance_model->update($inst_id, $params_instance);
-                    $this->wf_task_model->updateCond(
-                                                    array(
-                                                        'wf_inst_id' => $inst_id, 
-                                                        'wf_task_status' => 'I'
-                                                    ), 
-                                                    array(
-                                                        'wf_task_status' => 'C',
-                                                        'wf_task_comment' => 'Workflow termined by system',
-                                                        'wf_task_cancel_trigger' => 'S',
-                                                        'wf_task_end_time' => date('Y-m-d H:i:s')
-                                                    )
-                                                );
-                }
-                /////////////////////////////////////////////////////////////////////////////////////////////////////////
+                //Execute Workflow
+                $result_str = execute_workflow($entity->wf_id, $inst_id, $entity, $entity_id, $entity_name, $start, true);
                 sfsuccess($result_str);
                 $this->response->redirect('workflow_validation_leave/detail/' . $inst_id);
             }
@@ -367,121 +247,8 @@ class Workflow_validation_leave extends Controller{
                      );
                 ////////////////////////////////// CONTINUE WORKFLOW ///////////////////////////////////////////////////////
                 $taskNode = $this->wf_node_model->getInfo($taskInfo->wf_node_id);
-                $previousNode = $taskNode;
-                $previousNodeScriptResult = null;
-                $previousNodeServiceResult = null;
-                $previousNodeScriptId = null;
-                $previousNodeServiceId = null;
-                $nextNode = $this->wf_node_path_model->getNextNodeForWorkflow($entity->wf_id, $taskNode->wf_node_id, 1);
-                $endNodeReached = false; //if already at the end node
-                $stop = false; //if need sort out the loop
-                $wf_task_types = get_wf_task_type_list();
-                $result_str = __tr('wf_txt_validation_success');
-                while(! $stop && ! $endNodeReached){
-                    if(! $nextNode || is_end_node($nextNode->wf_node_type)){
-                        //workflow finish here
-                        $this->logger->info('Next node does not exist or is the End node, workflow finish here');
-                        $endNodeReached = true;
-                        $result_str = __tr('wf_txt_validation_success_and_finish_no_next_node_or_end_node');
-                        break;
-                    }
-                    $this->logger->info('Begin execution of node [' .$nextNode->wf_node_name. '], task type [' .$wf_task_types[$nextNode->wf_node_task_type]. '] ...');
-
-                    //first check if is user node
-                    if(is_user_node($nextNode->wf_node_task_type)){
-                        //insert task
-                        $actors = $this->wf_user_role_model->getList($inst_id, $nextNode->wf_role_id);
-                        if(! empty($actors)){
-                            $params_task = array(
-                                'wf_task_status' => 'I',
-                                'wf_task_comment' => '',
-                                'wf_task_start_time' => date('Y-m-d H:i:s'),
-                                'wf_inst_id' => $inst_id,
-                                'wf_node_id' => $nextNode->wf_node_id,
-                            );
-                            foreach ($actors as $l) {
-                                $params_task['user_id'] = $l->user_id;
-                                $this->wf_task_model->insert($params_task);  
-                            }
-                        }
-                        else{
-                            //no actors, workflow end here
-                             $this->logger->info('No actors for user node [' . $nextNode->wf_node_name . '], workflow finish here');
-                            $result_str = __tr('wf_txt_validation_success_and_finish_no_actors_for_user_node');
-                            $endNodeReached = true;
-                        }
-                        $stop = true;
-                        break;
-                    }
-                     //check if is script node
-                    else if(is_script_node($nextNode->wf_node_task_type)){
-                        //execute script
-                        if($nextNode->wf_node_script){
-                            $previousNodeScriptResult = run_wf_script_node($nextNode->wf_node_script, array(
-                                'instance_id' => $inst_id,
-                                'entity_id' => $entity_id,
-                                'entity_name' => $entity_name
-                            ));
-                            $previousNodeScriptId = $nextNode->wf_node_id;
-                            $this->logger->info('Previous script result is: ' .$previousNodeScriptResult);
-                            $this->logger->info('Previous script node id is: ' .$previousNodeScriptId);
-                        }
-                        $previousNode = $nextNode;
-                        $nextNode = $this->wf_node_path_model->getNextNodeForWorkflow($entity->wf_id, $nextNode->wf_node_id, 1);
-                    }
-                     //check if is service node
-                    else if(is_service_node($nextNode->wf_node_task_type)){
-                        //execute service
-                        if($nextNode->wf_node_service){
-                            $service_definition = $nextNode->wf_node_service;
-                            $previousNodeServiceResult = run_wf_service_node($service_definition, array(
-                                'instance_id' => $inst_id,
-                                'entity_id' => $entity_id,
-                                'entity_name' => $entity_name
-                            ));
-                            $previousNodeServiceId = $nextNode->wf_node_id;
-                            $this->logger->info('Previous service result is: ' .$previousNodeServiceResult);
-                            $this->logger->info('Previous service node id is: ' .$previousNodeServiceId);
-                        }
-                        $previousNode = $nextNode;
-                        $nextNode = $this->wf_node_path_model->getNextNodeForWorkflow($entity->wf_id, $nextNode->wf_node_id, 1);
-                    }
-                     //check if is decision node
-                    else if(is_decision_node($nextNode->wf_node_task_type)){
-                        $nodeFound = find_next_node_for_decision_node($inst_id, $entity, $nextNode, $previousNode, $previousNodeServiceResult, $previousNodeScriptResult);
-                        if($nodeFound){
-                            $previousNode = $nextNode;
-                            $nextNode = $nodeFound;
-                        }
-                         else{
-                            $result_str = __tr('wf_txt_validation_success_and_finish_no_path_for_decision_node');
-                            $stop = true;
-                            $endNodeReached = true;
-                            $this->logger->info('No nodes match the conditions for decision node [' .$nextNode->wf_node_name. ']');
-                        }
-                    }
-                    $this->logger->info('End execution of node [' .$previousNode->wf_node_name. ']');
-                }
-                //check if we already at the end
-                if($endNodeReached){
-                    $this->logger->info('End node reached stop workflow here');
-                    $params_instance = array(
-                        'wf_inst_state' => 'T',
-                        'wf_inst_end_date' => date('Y-m-d H:i:s')
-                    );
-                    $this->wf_instance_model->update($inst_id, $params_instance);
-                    $this->wf_task_model->updateCond(
-                                                    array(
-                                                        'wf_inst_id' => $inst_id, 
-                                                        'wf_task_status' => 'I'
-                                                    ), 
-                                                    array(
-                                                        'wf_task_status' => 'C',
-                                                        'wf_task_cancel_trigger' => 'S',
-                                                        'wf_task_end_time' => date('Y-m-d H:i:s')
-                                                    )
-                                                );
-                }
+                //Execute Workflow
+                $result_str = execute_workflow($entity->wf_id, $inst_id, $entity, $entity_id, $entity_name, $taskNode, false);
                 /////////////////////////////////////////////////////////////////////////////////////////////////////////
                 sfsuccess($result_str);
                 $this->response->redirect('workflow_validation_leave/detail/' . $inst_id);
